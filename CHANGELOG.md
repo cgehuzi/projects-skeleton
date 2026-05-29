@@ -3,15 +3,6 @@
 История значимых изменений skeleton. Проекты ориентируются на неё при обновлении из
 upstream (см. [docs/UPGRADING.md](docs/UPGRADING.md)). Формат — по релизным тегам.
 
-## [0.0.2] — 2026-05-29
-
-### Fixed
-
-- `make init-backend`: `composer create-project` и `composer require filament/filament`
-  обёрнуты в ретрай (до 3 попыток) — лечит транзиентный флак параллельной распаковки
-  composer на macOS bind-mount (`Failed to open directory …`), из-за которого ранее
-  не доезжал `filament:install`.
-
 ## [0.0.1] — 2026-05-29
 
 Первичная оболочка (Model B): инфраструктура, мультипроектность, инициализация
