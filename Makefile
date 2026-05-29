@@ -14,6 +14,9 @@ NODE := $(DC) exec node
 PHP_RUN := $(DC) run --rm --no-deps php
 NODE_RUN := $(DC) run --rm --no-deps node
 
+# Репозиторий релизов package-core (редко меняется; при нужде: make ... CORE_REPO=org/repo).
+CORE_REPO ?= cgehuzi/package-core
+
 .DEFAULT_GOAL := help
 
 # ── Справка ─────────────────────────────────────────────────────────────────
@@ -125,6 +128,48 @@ init-frontend: ## Создать Next.js в frontend/ (или поставить
 		cp stubs/next.config.ts frontend/next.config.ts; \
 		echo "✓ frontend создан (Next.js, output: standalone)"; \
 	fi
+
+# ── Ядро (package-core): установка из релиза или живой линк ───────────────────
+# Проводку (CorePlugin в AdminPanelProvider + catch-all) делаем вручную по README пакетов.
+.PHONY: core-install
+core-install: ## Установить package-core из GitHub-релиза: make core-install VERSION=0.0.1
+	@[ -n "$(VERSION)" ] || { echo "✗ укажите версию: make core-install VERSION=X.Y.Z"; exit 1; }
+	@repo="$(CORE_REPO)"; v="$(VERSION)"; tag="v$$v"; \
+	disturl="https://github.com/$$repo/releases/download/$$tag/core-backend-$$tag.tar.gz"; \
+	echo "→ core-backend $$tag: беру манифест пакета из репозитория, ставлю из релиза"; \
+	curl -fsSL "https://raw.githubusercontent.com/$$repo/$$tag/backend/composer.json" -o backend/.core-src.json \
+		|| { echo "✗ не удалось получить composer.json пакета ($$repo@$$tag)"; exit 1; }; \
+	$(PHP_RUN) php -r '$$p=json_decode(file_get_contents(".core-src.json"),true); unset($$p["require-dev"],$$p["autoload-dev"],$$p["config"],$$p["scripts"],$$p["minimum-stability"],$$p["prefer-stable"]); $$p["version"]=$$argv[1]; $$p["dist"]=["url"=>$$argv[2],"type"=>"tar"]; file_put_contents(".core-repo.json", json_encode(["type"=>"package","package"=>$$p], JSON_UNESCAPED_SLASHES));' "$$v" "$$disturl"; \
+	$(PHP_RUN) sh -c 'composer config repositories.cgehuzi-core-backend --json "$$(cat .core-repo.json)"'; \
+	rm -f backend/.core-src.json backend/.core-repo.json; \
+	$(PHP_RUN) composer require "cgehuzi/core-backend:$$v" --no-interaction; \
+	echo "→ core-frontend $$tag (npm, релиз)"; \
+	$(NODE_RUN) npm install "https://github.com/$$repo/releases/download/$$tag/core-frontend-$$tag.tgz"; \
+	echo "✓ package-core $$tag установлен."; \
+	echo "  Доделать вручную: CorePlugin в AdminPanelProvider + тонкий catch-all (см. README пакетов)."
+
+.PHONY: core-link
+core-link: ## Живой линк локального package-core (CORE_PATH в .env) для дебага пакетов
+	@if [ -f compose.override.yaml ] && ! grep -q 'managed-by: make core-link' compose.override.yaml; then \
+		echo "✗ compose.override.yaml уже есть и не управляется core-link — слейте/уберите вручную"; exit 1; \
+	fi
+	cp stubs/compose.core-link.yaml compose.override.yaml
+	$(MAKE) up
+	@echo "→ core-backend: composer path-repo (живой symlink)"; \
+	$(PHP_RUN) composer config repositories.cgehuzi-core-backend '{"type":"path","url":"/packages/core/backend","options":{"symlink":true}}'; \
+	$(PHP_RUN) composer require "cgehuzi/core-backend:*" --no-interaction; \
+	echo "✓ package-core залинкован вживую: backend — symlink, frontend — bind-mount в node_modules."; \
+	echo "  Правки в CORE_PATH видны сразу. Проводка (CorePlugin + catch-all) — вручную."
+
+.PHONY: core-unlink
+core-unlink: ## Снять живой линк package-core (вернуть к чистому стеку)
+	@if [ -f backend/composer.json ]; then \
+		$(PHP_RUN) composer remove cgehuzi/core-backend --no-interaction || true; \
+		$(PHP_RUN) composer config --unset repositories.cgehuzi-core-backend || true; \
+	fi
+	@rm -f compose.override.yaml
+	$(MAKE) up
+	@echo "✓ линк снят (mount и composer-зависимость удалены)."
 
 # ── Общий reverse-proxy (Traefik), один на машину ─────────────────────────────
 .PHONY: proxy-network

@@ -1,0 +1,21 @@
+# managed-by: make core-link
+# Живой линк локального package-core (CORE_PATH из .env) для доработки/дебага пакетов.
+# Скопировано в compose.override.yaml командой `make core-link`. Отключить: make core-unlink.
+#
+# CORE_PATH резолвится относительно корня проекта (package-core рядом с проектом).
+
+services:
+  php:
+    volumes:
+      - ${CORE_PATH:?CORE_PATH must be set in .env}:/packages/core:ro
+  queue:
+    volumes:
+      - ${CORE_PATH}:/packages/core:ro
+  scheduler:
+    volumes:
+      - ${CORE_PATH}:/packages/core:ro
+  node:
+    volumes:
+      - ${CORE_PATH}:/packages/core:ro
+      # Исходник фронт-пакета подменяет node_modules-запись → правки видны вживую.
+      - ${CORE_PATH}/frontend:/app/frontend/node_modules/@cgehuzi/core-frontend:ro
