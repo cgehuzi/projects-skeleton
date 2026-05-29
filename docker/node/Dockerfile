@@ -22,7 +22,8 @@ RUN apk add --no-cache su-exec
 # на проверке прав родителя проекта. /app/frontend — это bind-mount с хоста.
 RUN mkdir -p /app && chmod 0777 /app
 
-ENV NODE_ENV=development
+# NODE_ENV не задаём: `next dev` сам выставляет development, `next build` — production.
+# Жёстко прошитый development ломает сборку в CI (build-worker падает с useContext null).
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY docker/node/entrypoint.sh /usr/local/bin/entrypoint.sh
