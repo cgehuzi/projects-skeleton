@@ -1,0 +1,29 @@
+# Точка расширения Docker-стека для конкретного проекта.
+#
+# Скопируйте в compose.override.yaml — Docker Compose автоматически смёржит его
+# поверх compose.yaml (его править НЕ нужно, он skeleton-managed). Так локальные/
+# проектные настройки не конфликтуют при обновлении skeleton из upstream.
+#
+#   cp compose.override.example.yaml compose.override.yaml
+#
+# По умолчанию файл — пустой (только комментарии), это валидный no-op.
+# Раскомментируйте `services:` и нужные блоки.
+
+# services:
+#   # ── Зафиксировать порт Postgres на хосте (вместо эфемерного) ──────────────
+#   postgres:
+#     ports:
+#       - "5432:5432"
+#
+#   # ── Дополнительный сервис: Mailpit (перехват писем в dev) ──────────────────
+#   mailpit:
+#     image: axllent/mailpit:latest
+#     ports:
+#       - "127.0.0.1:8025:8025"   # web UI
+#     networks:
+#       - app
+#
+#   # ── Прокинуть проектную переменную в Next ─────────────────────────────────
+#   node:
+#     environment:
+#       MY_PROJECT_FLAG: "1"

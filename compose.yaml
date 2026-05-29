@@ -1,0 +1,145 @@
+# Базовый dev-стек проекта. Запуск: make up (или docker compose up -d).
+# Несколько проектов на базе skeleton запускаются параллельно: HTTP-порт наружу
+# не публикуется, маршрутизация — через общий reverse-proxy (Traefik) по хосту
+# <project>.localhost / api.<project>.localhost. См. docker/proxy/.
+# Боевой стек собирается из тех же Dockerfile (target: production) отдельно.
+
+name: ${COMPOSE_PROJECT_NAME:-app}
+
+# Общая база для php-сервисов (php-fpm, queue, scheduler). Рантайм-пользователь
+# задаётся под хостовые UID/GID — файлы в bind-mount остаются «своими» на хосте.
+x-php-common: &php-common
+  build:
+    context: .
+    dockerfile: docker/php/Dockerfile
+    target: development
+  user: "${UID:-1000}:${GID:-1000}"
+  volumes:
+    - ./backend:/var/www/backend
+  environment:
+    # Composer запускается не от root и без home — кэш кладём в writable-путь.
+    COMPOSER_HOME: /tmp/composer
+    HOME: /tmp
+  networks:
+    - app
+
+services:
+  # ── Edge проекта: nginx перед php-fpm (Laravel). Публикуется через Traefik ──
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+      target: development
+    volumes:
+      - ./backend:/var/www/backend:ro
+    depends_on:
+      - php
+    networks:
+      app:
+        # Алиас только в app-сети (project-scoped) — по нему Next ходит в API
+        # server-side. Не используем имя "nginx": оно конфликтует в общей proxy-сети.
+        aliases:
+          - api-internal
+      proxy: {}
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-api.rule=Host(`api.${PROJECT_DOMAIN:-app}.localhost`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-api.entrypoints=web
+      - traefik.http.services.${COMPOSE_PROJECT_NAME:-app}-api.loadbalancer.server.port=80
+
+  # ── Backend: Laravel + Filament (php-fpm) ──────────────────────────────────
+  php:
+    <<: *php-common
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  # ── Очередь Laravel ────────────────────────────────────────────────────────
+  queue:
+    <<: *php-common
+    command: php artisan queue:work --tries=3 --timeout=90
+    restart: unless-stopped
+    depends_on:
+      - php
+
+  # ── Планировщик Laravel ────────────────────────────────────────────────────
+  scheduler:
+    <<: *php-common
+    command: php artisan schedule:work
+    restart: unless-stopped
+    depends_on:
+      - php
+
+  # ── Frontend: Next.js (SSR). Публикуется через Traefik ─────────────────────
+  node:
+    build:
+      context: .
+      dockerfile: docker/node/Dockerfile
+      target: development
+    volumes:
+      - ./frontend:/app/frontend
+    environment:
+      # Создание рантайм-пользователя под хостовые UID/GID делает entrypoint.
+      PUID: ${UID:-1000}
+      PGID: ${GID:-1000}
+      # Server-side обращения к API внутри сети — без публичного хопа.
+      INTERNAL_API_URL: http://api-internal/api
+      # Браузерные обращения (если понадобятся) идут на публичный хост проекта.
+      NEXT_PUBLIC_API_URL: http://api.${PROJECT_DOMAIN:-app}.localhost/api
+      WATCHPACK_POLLING: "true"
+    networks:
+      - app
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-web.rule=Host(`${PROJECT_DOMAIN:-app}.localhost`)
+      - traefik.http.routers.${COMPOSE_PROJECT_NAME:-app}-web.entrypoints=web
+      - traefik.http.services.${COMPOSE_PROJECT_NAME:-app}-web.loadbalancer.server.port=3000
+
+  # ── База данных: PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    # Эфемерный порт на loopback — Docker выберет свободный, конфликтов между
+    # проектами нет. Узнать порт: make ports (или docker compose port postgres 5432).
+    ports:
+      - "127.0.0.1::5432"
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-app}
+      POSTGRES_USER: ${DB_USERNAME:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-app} -d ${DB_DATABASE:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+
+  # ── Кэш / очереди / сессии: Redis ──────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1::6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app
+
+volumes:
+  postgres-data:
+  redis-data:
+
+networks:
+  # Внутренняя сеть проекта (изолирована, имя префиксуется проектом).
+  app:
+    driver: bridge
+  # Общая сеть с reverse-proxy (Traefik). Создаётся один раз: make proxy-up.
+  proxy:
+    external: true
+    name: proxy

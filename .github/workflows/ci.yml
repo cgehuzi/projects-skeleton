@@ -1,0 +1,61 @@
+# CI-пайплайн. Работает и на «пустом» skeleton (создаёт каркасы через make init-*),
+# и в проекте, который уже закоммитил свой каркас (тогда init-* просто ставит зависимости).
+# Прогон идёт в тех же Docker-образах, что и локальная разработка (Docker-first).
+#
+# Переиспользование проектом по версии:
+#   jobs:
+#     ci:
+#       uses: cgehuzi/projects-skeleton/.github/workflows/ci.yml@v1
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  backend:
+    name: Backend (Laravel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: |
+          cp .env.example .env
+          sed -i "s/^UID=.*/UID=$(id -u)/; s/^GID=.*/GID=$(id -g)/" .env
+
+      - name: Build php image
+        run: docker compose build php
+
+      - name: Init backend (scaffold или composer install)
+        run: make init-backend
+
+      - name: Test
+        run: docker compose run --rm --no-deps php php artisan test
+
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare env
+        run: |
+          cp .env.example .env
+          sed -i "s/^UID=.*/UID=$(id -u)/; s/^GID=.*/GID=$(id -g)/" .env
+
+      # node подключён к внешней сети proxy — в CI её надо создать.
+      - name: Ensure proxy network
+        run: docker network create proxy || true
+
+      - name: Build node image
+        run: docker compose build node
+
+      - name: Init frontend (scaffold или npm ci)
+        run: make init-frontend
+
+      - name: Lint & build
+        run: docker compose run --rm --no-deps node sh -lc 'npm run lint && npm run build'

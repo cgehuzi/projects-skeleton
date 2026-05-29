@@ -1,0 +1,29 @@
+# Контекст сборки prod-образов не должен тащить зависимости, артефакты и секреты.
+
+.git
+.github
+
+# Секреты окружения (в прод приходят через environment/secrets, не из образа).
+.env
+.env.*
+backend/.env
+backend/.env.*
+frontend/.env*.local
+
+# Зависимости и артефакты — ставятся/собираются внутри образа.
+backend/vendor
+backend/node_modules
+frontend/node_modules
+frontend/.next
+frontend/out
+
+# Локальные данные/логи.
+backend/storage/logs/*
+backend/storage/framework/cache/data/*
+backend/storage/framework/sessions/*
+backend/storage/framework/views/*
+**/database.sqlite
+
+# Прочее.
+**/.DS_Store
+compose.override.yaml

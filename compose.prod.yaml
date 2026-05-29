@@ -1,0 +1,128 @@
+# Боевой стек. Образы собираются из тех же Dockerfile (target: production):
+#   docker compose -f compose.prod.yaml --env-file .env.prod build
+#   docker compose -f compose.prod.yaml --env-file .env.prod up -d
+#   docker compose -f compose.prod.yaml --env-file .env.prod run --rm php php artisan migrate --force
+#
+# Образы можно публиковать в реестр (CI) и на деплое только pull'ить.
+# Postgres/Redis тут включены для самодостаточности — в реальном проде обычно
+# выносятся в managed-сервисы (закомментировать и задать внешние DB_HOST/REDIS_HOST).
+
+name: ${COMPOSE_PROJECT_NAME:-app}
+
+x-php-prod: &php-prod
+  image: ${REGISTRY:-app}/php:${TAG:-latest}
+  build:
+    context: .
+    dockerfile: docker/php/Dockerfile
+    target: production
+  restart: unless-stopped
+  environment:
+    APP_ENV: production
+    APP_DEBUG: "false"
+    APP_KEY: ${APP_KEY}
+    APP_URL: ${APP_URL}
+    APP_LOCALE: ${APP_LOCALE:-ru}
+    LOG_CHANNEL: stderr
+    DB_CONNECTION: pgsql
+    DB_HOST: ${DB_HOST:-postgres}
+    DB_PORT: ${DB_PORT:-5432}
+    DB_DATABASE: ${DB_DATABASE:-app}
+    DB_USERNAME: ${DB_USERNAME:-app}
+    DB_PASSWORD: ${DB_PASSWORD}
+    REDIS_HOST: ${REDIS_HOST:-redis}
+    REDIS_PORT: ${REDIS_PORT:-6379}
+    CACHE_STORE: redis
+    SESSION_DRIVER: redis
+    QUEUE_CONNECTION: redis
+  volumes:
+    - app-storage:/var/www/backend/storage/app
+  networks:
+    - app
+
+services:
+  php:
+    <<: *php-prod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  queue:
+    <<: *php-prod
+    command: php artisan queue:work --tries=3 --timeout=90
+    depends_on:
+      - php
+
+  scheduler:
+    <<: *php-prod
+    command: php artisan schedule:work
+    depends_on:
+      - php
+
+  node:
+    image: ${REGISTRY:-app}/node:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/node/Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      # Server-side обращения к API — через единый edge (nginx) внутри сети.
+      INTERNAL_API_URL: http://nginx/api
+      NEXT_PUBLIC_API_URL: ${APP_URL}/api
+    networks:
+      - app
+
+  nginx:
+    image: ${REGISTRY:-app}/nginx:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+      target: production
+      # Боевой nginx копирует public/ Laravel'а из прод-образа php.
+      additional_contexts:
+        php: service:php
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - php
+      - node
+    networks:
+      - app
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-app}
+      POSTGRES_USER: ${DB_USERNAME:-app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-app} -d ${DB_DATABASE:-app}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - app
+
+volumes:
+  app-storage:
+  postgres-data:
+  redis-data:
+
+networks:
+  app:
+    driver: bridge
