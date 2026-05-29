@@ -52,10 +52,37 @@ docker compose -f compose.prod.yaml --env-file .env.prod run --rm php php artisa
 # сайт: http://localhost:${HTTP_PORT}  •  админка: .../admin
 ```
 
-## CI: публикация образов
+## CI: публикация образов (на стороне ПРОЕКТА)
 
-Тег `vX.Y.Z` → workflow `.github/workflows/release.yml` собирает и пушит образы в
-GHCR: `ghcr.io/<owner>/<repo>/{php,node,nginx}:vX.Y.Z`.
+Прод-образы собираются из кода приложения, поэтому их публикует **проект** (у него
+закоммичен каркас), а не skeleton (в шаблоне приложения нет; релизы skeleton создаются
+вручную на GitHub). Добавьте в проект workflow по тегу, например
+`.github/workflows/images.yml`:
+
+```yaml
+name: Images
+on:
+  push:
+    tags: ["v*"]
+permissions: { contents: read, packages: write }
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io/${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker compose -f compose.prod.yaml build
+      - run: docker compose -f compose.prod.yaml push
+```
+
+Образы: `ghcr.io/<owner>/<repo>/{php,node,nginx}:vX.Y.Z`. Тег `vX.Y.Z` запустит сборку:
 
 ```bash
 git tag v1.2.0 && git push origin v1.2.0
